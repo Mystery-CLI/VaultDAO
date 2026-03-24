@@ -330,6 +330,7 @@ impl VaultDAO {
         }
 
         // 4. Validate recipient against lists
+        Self::validate_recipient(&env, &recipient)?;
 
         // 5. Velocity Limit Check (Sliding Window)
         if !storage::check_and_update_velocity(&env, &proposer, &config.velocity_limit) {
@@ -1809,7 +1810,8 @@ impl VaultDAO {
             return Err(VaultError::InvalidAmount);
         }
 
-        // Validate recipient against lists
+        // Validate recipient against whitelist/blacklist policies
+        Self::validate_recipient(&env, &recipient)?;
 
         // Minimum interval check (e.g. 1 hour = 720 ledgers)
         if interval < 720 {
@@ -1873,6 +1875,11 @@ impl VaultDAO {
         if balance < payment.amount {
             return Err(VaultError::InsufficientBalance);
         }
+
+        // Revalidate recipient against current whitelist/blacklist policies.
+        // Policies may have changed since scheduling; block execution if the
+        // recipient is no longer permitted.
+        Self::validate_recipient(&env, &payment.recipient)?;
 
         // Execute
         token::transfer(&env, &payment.token, &payment.recipient, payment.amount);

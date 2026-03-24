@@ -9106,3 +9106,476 @@ fn invariant_executed_proposal_cannot_receive_new_approvals() {
     let res = client.try_approve_proposal(&s1, &pid);
     assert_eq!(res.err(), Some(Ok(VaultError::ProposalNotPending)));
 }
+
+// ============================================================================
+// Recurring Payment Whitelist / Blacklist Enforcement Tests
+// ============================================================================
+
+/// Helper: build a minimal InitConfig for recurring-payment tests.
+fn recurring_init_config(env: &Env, admin: &Address, treasurer: &Address) -> InitConfig {
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(admin.clone());
+    signers.push_back(treasurer.clone());
+    InitConfig {
+        signers,
+        threshold: 1,
+        quorum: 0,
+        default_voting_deadline: 0,
+        spending_limit: 10_000,
+        daily_limit: 100_000,
+        weekly_limit: 500_000,
+        timelock_threshold: 50_000,
+        timelock_delay: 100,
+        velocity_limit: VelocityConfig {
+            limit: 1000,
+            window: 3600,
+        },
+        threshold_strategy: ThresholdStrategy::Fixed,
+        veto_addresses: soroban_sdk::Vec::new(env),
+        retry_config: RetryConfig {
+            enabled: false,
+            max_retries: 0,
+            initial_backoff_ledgers: 0,
+        },
+        recovery_config: crate::types::RecoveryConfig::default(env),
+        staking_config: crate::types::StakingConfig::default(),
+    }
+}
+
+/// Scheduling a recurring payment for a whitelisted recipient succeeds when
+/// the vault is in Whitelist mode.
+#[test]
+fn test_recurring_schedule_whitelisted_recipient_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    // Enable whitelist mode and approve the recipient.
+    client.set_list_mode(&admin, &ListMode::Whitelist);
+    client.add_to_whitelist(&admin, &recipient);
+
+    let result = client.try_schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "salary"),
+        &720u64,
+    );
+    assert!(
+        result.is_ok(),
+        "Expected scheduling to succeed for a whitelisted recipient"
+    );
+}
+
+/// Scheduling a recurring payment for a non-whitelisted recipient fails with
+/// RecipientNotWhitelisted when the vault is in Whitelist mode.
+#[test]
+fn test_recurring_schedule_non_whitelisted_recipient_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env); // NOT added to whitelist
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    client.set_list_mode(&admin, &ListMode::Whitelist);
+    // Deliberately do NOT whitelist the recipient.
+
+    let result = client.try_schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "salary"),
+        &720u64,
+    );
+    assert_eq!(
+        result.err(),
+        Some(Ok(VaultError::RecipientNotWhitelisted)),
+        "Expected RecipientNotWhitelisted for a non-whitelisted recipient in whitelist mode"
+    );
+}
+
+/// Scheduling a recurring payment for a blacklisted recipient fails with
+/// RecipientBlacklisted when the vault is in Blacklist mode.
+#[test]
+fn test_recurring_schedule_blacklisted_recipient_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let blocked = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    client.set_list_mode(&admin, &ListMode::Blacklist);
+    client.add_to_blacklist(&admin, &blocked);
+
+    let result = client.try_schedule_payment(
+        &treasurer,
+        &blocked,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "blocked"),
+        &720u64,
+    );
+    assert_eq!(
+        result.err(),
+        Some(Ok(VaultError::RecipientBlacklisted)),
+        "Expected RecipientBlacklisted for a blacklisted recipient in blacklist mode"
+    );
+}
+
+/// Scheduling a recurring payment for a non-blacklisted recipient succeeds
+/// when the vault is in Blacklist mode.
+#[test]
+fn test_recurring_schedule_non_blacklisted_recipient_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let allowed = Address::generate(&env); // not on blacklist
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    client.set_list_mode(&admin, &ListMode::Blacklist);
+    // allowed is not blacklisted — scheduling must succeed.
+
+    let result = client.try_schedule_payment(
+        &treasurer,
+        &allowed,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "ok"),
+        &720u64,
+    );
+    assert!(
+        result.is_ok(),
+        "Expected scheduling to succeed for a non-blacklisted recipient in blacklist mode"
+    );
+}
+
+/// Scheduling succeeds when list mode is Disabled regardless of any lists.
+#[test]
+fn test_recurring_schedule_list_disabled_always_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    // Default mode is Disabled — no restrictions.
+    let result = client.try_schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "free"),
+        &720u64,
+    );
+    assert!(
+        result.is_ok(),
+        "Expected scheduling to succeed when list mode is Disabled"
+    );
+}
+
+/// Execution is blocked when the recipient was added to the blacklist after
+/// the payment was scheduled (revalidation at execution time).
+#[test]
+fn test_recurring_execute_blocked_after_blacklisted_post_schedule() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_contract.address();
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&contract_id, &10_000);
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    // Schedule while list mode is Disabled — succeeds.
+    let payment_id = client.schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "pay"),
+        &720u64,
+    );
+
+    // Now switch to Blacklist mode and block the recipient.
+    client.set_list_mode(&admin, &ListMode::Blacklist);
+    client.add_to_blacklist(&admin, &recipient);
+
+    // Advance ledger so the payment is due.
+    env.ledger().set_sequence_number(1000 + 720 + 1);
+    env.ledger().set_timestamp(2_000_000);
+
+    let result = client.try_execute_recurring_payment(&payment_id);
+    assert_eq!(
+        result.err(),
+        Some(Ok(VaultError::RecipientBlacklisted)),
+        "Expected RecipientBlacklisted when recipient was blacklisted after scheduling"
+    );
+}
+
+/// Execution is blocked when the recipient is not whitelisted at execution
+/// time, even if the payment was scheduled before whitelist mode was enabled.
+#[test]
+fn test_recurring_execute_blocked_when_whitelist_enabled_post_schedule() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_contract.address();
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&contract_id, &10_000);
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    // Schedule while list mode is Disabled.
+    let payment_id = client.schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "pay"),
+        &720u64,
+    );
+
+    // Enable whitelist mode WITHOUT adding the recipient.
+    client.set_list_mode(&admin, &ListMode::Whitelist);
+
+    env.ledger().set_sequence_number(1000 + 720 + 1);
+    env.ledger().set_timestamp(2_000_000);
+
+    let result = client.try_execute_recurring_payment(&payment_id);
+    assert_eq!(
+        result.err(),
+        Some(Ok(VaultError::RecipientNotWhitelisted)),
+        "Expected RecipientNotWhitelisted when whitelist mode was enabled after scheduling"
+    );
+}
+
+/// Execution succeeds when the recipient is whitelisted at execution time.
+#[test]
+fn test_recurring_execute_succeeds_for_whitelisted_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_contract.address();
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&contract_id, &10_000);
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    // Whitelist mode active; recipient is approved.
+    client.set_list_mode(&admin, &ListMode::Whitelist);
+    client.add_to_whitelist(&admin, &recipient);
+
+    let payment_id = client.schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "pay"),
+        &720u64,
+    );
+
+    env.ledger().set_sequence_number(1000 + 720 + 1);
+    env.ledger().set_timestamp(2_000_000);
+
+    let result = client.try_execute_recurring_payment(&payment_id);
+    assert!(
+        result.is_ok(),
+        "Expected execution to succeed for a whitelisted recipient"
+    );
+}
+
+/// Execution succeeds when the recipient is not blacklisted at execution time.
+#[test]
+fn test_recurring_execute_succeeds_for_non_blacklisted_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_contract.address();
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&contract_id, &10_000);
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    client.set_list_mode(&admin, &ListMode::Blacklist);
+    // recipient is NOT on the blacklist.
+
+    let payment_id = client.schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "pay"),
+        &720u64,
+    );
+
+    env.ledger().set_sequence_number(1000 + 720 + 1);
+    env.ledger().set_timestamp(2_000_000);
+
+    let result = client.try_execute_recurring_payment(&payment_id);
+    assert!(
+        result.is_ok(),
+        "Expected execution to succeed for a non-blacklisted recipient"
+    );
+}
+
+/// Removing a recipient from the blacklist re-enables execution.
+#[test]
+fn test_recurring_execute_succeeds_after_removing_from_blacklist() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(1000);
+    env.ledger().set_timestamp(1_000_000);
+
+    let contract_id = env.register(VaultDAO, ());
+    let client = VaultDAOClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasurer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_contract.address();
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&contract_id, &10_000);
+
+    client.initialize(&admin, &recurring_init_config(&env, &admin, &treasurer));
+    client.set_role(&admin, &treasurer, &Role::Treasurer);
+
+    // Schedule while Disabled.
+    let payment_id = client.schedule_payment(
+        &treasurer,
+        &recipient,
+        &token,
+        &500i128,
+        &Symbol::new(&env, "pay"),
+        &720u64,
+    );
+
+    // Blacklist the recipient — execution should fail.
+    client.set_list_mode(&admin, &ListMode::Blacklist);
+    client.add_to_blacklist(&admin, &recipient);
+
+    env.ledger().set_sequence_number(1000 + 720 + 1);
+    env.ledger().set_timestamp(2_000_000);
+
+    let blocked = client.try_execute_recurring_payment(&payment_id);
+    assert_eq!(
+        blocked.err(),
+        Some(Ok(VaultError::RecipientBlacklisted)),
+        "Execution must be blocked while recipient is blacklisted"
+    );
+
+    // Remove from blacklist — execution should now succeed.
+    client.remove_from_blacklist(&admin, &recipient);
+
+    // Advance past the (unchanged) next_payment_ledger — it was not updated
+    // because the previous execution failed, so the same ledger is still due.
+    let result = client.try_execute_recurring_payment(&payment_id);
+    assert!(
+        result.is_ok(),
+        "Expected execution to succeed after removing recipient from blacklist"
+    );
+}
