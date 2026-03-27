@@ -91,5 +91,5 @@ export function startServer(env: BackendEnv = loadEnv()) {
     );
   });
 
-  return { server, runtime };
+  return server;
 }

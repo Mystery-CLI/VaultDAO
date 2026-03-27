@@ -38,7 +38,7 @@ export function getRecurringByIdController(
 ): RequestHandler {
   return async (request, response) => {
     try {
-      const { id } = request.params;
+      const id = String(request.params.id);
 
       const payment = await service.getPayment(id);
       if (!payment) {
@@ -63,7 +63,7 @@ export function getRecurringByIdController(
 export function getDueRecurringController(
   service: RecurringIndexerService,
 ): RequestHandler {
-  return async (request, response) => {
+  return async (_request, response) => {
     try {
       const payments = await service.getDuePayments();
 

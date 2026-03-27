@@ -37,7 +37,7 @@ export function getProposalByIdController(
 ): RequestHandler {
   return (request, response) => {
     try {
-      const { id } = request.params;
+      const id = String(request.params.id);
 
       const summary = aggregator.getSummary(id);
       if (!summary) {
@@ -62,7 +62,7 @@ export function getProposalByIdController(
 export function getProposalStatsController(
   aggregator: ProposalActivityAggregator,
 ): RequestHandler {
-  return (request, response) => {
+  return (_request, response) => {
     try {
       const stats = aggregator.getStats();
       success(response, stats);
