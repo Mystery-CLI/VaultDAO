@@ -7902,6 +7902,7 @@ fn test_veto_refunds_insurance_and_stake() {
         staking_config: crate::types::StakingConfig::default(),
         pre_execution_hooks: soroban_sdk::Vec::new(&env),
         post_execution_hooks: soroban_sdk::Vec::new(&env),
+        quorum_percentage: 0,
     };
     client.initialize(&admin, &config);
     client.set_role(&admin, &proposer, &Role::Treasurer);
