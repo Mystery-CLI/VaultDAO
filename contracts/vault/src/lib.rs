@@ -103,6 +103,8 @@ mod test_recurring;
 mod test_regressions;
 #[cfg(test)]
 mod test_subscriptions;
+#[cfg(test)]
+mod test_voting_deadline;
 
 #[contractimpl]
 #[allow(clippy::too_many_arguments)]
