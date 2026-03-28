@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   MemoryRecurringStorageAdapter,
   transformRawRecurringPayment,
-  RecurringIndexerService,
 } from "./recurring.service.js";
 import { RecurringStatus, RecurringEvent } from "./types.js";
 

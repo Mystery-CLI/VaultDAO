@@ -39,7 +39,7 @@ test("FileCursorAdapter handles corrupt JSON gracefully", async () => {
 
 test("FileCursorAdapter saves and loads cursor successfully", async () => {
   const adapter = new FileCursorAdapter(tempDir);
-  const expected: EventCursor = { lastId: "abc", lastLedger: 123, updatedAt: new Date().toISOString() };
+  const expected: EventCursor = { lastEventId: "abc", lastLedger: 123, updatedAt: new Date().toISOString() };
 
   await adapter.saveCursor(expected);
   const result = await adapter.getCursor();
