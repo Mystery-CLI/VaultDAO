@@ -1803,10 +1803,7 @@ fn test_duplicate_attachment_rejected() {
     client.add_attachment(&admin, &proposal_id, &cid);
 
     let result = client.try_add_attachment(&admin, &proposal_id, &cid);
-    assert_eq!(
-        result,
-        Err(Ok(VaultError::AttachmentHashInvalid))
-    );
+    assert_eq!(result, Err(Ok(VaultError::AttachmentHashInvalid)));
 }
 
 #[test]
