@@ -1599,10 +1599,11 @@ pub fn set_batch_result(env: &Env, result: &BatchExecutionResult) {
         .extend_ttl(&key, PROPOSAL_TTL / 2, PROPOSAL_TTL);
 }
 
-pub fn get_batch_result(env: &Env, batch_id: u64) -> Option<BatchExecutionResult> {
+pub fn get_batch_result(env: &Env, batch_id: u64) -> Result<BatchExecutionResult, VaultError> {
     env.storage()
         .persistent()
         .get(&FeatureKey::BatchResult(batch_id))
+        .ok_or(VaultError::ProposalNotFound)
 }
 
 pub fn set_rollback_state(env: &Env, batch_id: u64, state: &Vec<(Address, i128)>) {

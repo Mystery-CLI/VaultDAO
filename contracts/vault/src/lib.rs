@@ -5437,7 +5437,7 @@ impl VaultDAO {
     }
 
     /// Retrieve batch execution result
-    pub fn get_batch_result(env: Env, batch_id: u64) -> Option<BatchExecutionResult> {
+    pub fn get_batch_result(env: Env, batch_id: u64) -> Result<BatchExecutionResult, VaultError> {
         storage::get_batch_result(&env, batch_id)
     }
 
